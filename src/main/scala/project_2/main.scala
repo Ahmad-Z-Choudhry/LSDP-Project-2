@@ -99,14 +99,62 @@ object main{
   }
 
 
-  def BJKST(x: RDD[String], width: Int, trials: Int) : Double = {
+  def BJKST(x: RDD[String], width: Int, trials: Int): Double = {
+    // Initialize an array to hold the sketches
+    val sketches = Array.fill(trials)(new BJKSTSketch(Set.empty[(String, Int)], 0, width))
 
+
+    // Broadcast the sketches array to be accessible across the cluster
+    val sparkContext = x.sparkContext
+    val sketchesBroadcast = sparkContext.broadcast(sketches)
+
+    // Map each string in the RDD to a tuple of (sketchIndex, (string, zeroCount))
+    val hashedRDD = x.flatMap { s =>
+      (0 until trials).map { i =>
+        val hashFunc = new hash_function(2000000000L) // Assuming a large number of buckets for the hashing
+        val zeroCount = hashFunc.zeroes(hashFunc.hash(s))
+        (i, (s, zeroCount))
+      }
+    }
+
+    // Group by sketchIndex to aggregate strings and their zero counts per sketch
+    val groupedBySketchIndex = hashedRDD.groupByKey()
+
+    // Update each sketch with its corresponding strings and zero counts
+    groupedBySketchIndex.foreach { case (sketchIndex, stringsAndZeroCounts) =>
+      val sketch = sketchesBroadcast.value(sketchIndex)
+      stringsAndZeroCounts.foreach { case (s, zeroCount) =>
+        sketch.add_string(s, zeroCount)
+      }
+    }
+
+    // Collect estimates from each sketch and compute the median
+    val estimates = sketchesBroadcast.value.map(_.estimate).sorted
+    val medianEstimate = if (estimates.length % 2 == 0) {
+      val midIndex = estimates.length / 2
+      (estimates(midIndex - 1) + estimates(midIndex)) / 2.0
+    } else {
+      estimates(estimates.length / 2)
+    }
+
+    medianEstimate
   }
 
 
-  def Tug_of_War(x: RDD[String], width: Int, depth:Int) : Long = {
+  def Tug_of_War(x: RDD[String], width: Int, depth: Int): Long = {
+    val rand = new scala.util.Random(seed)
 
-  }
+    // Define a hash function that maps to +1 or -1
+    class ToWHashFunction extends Serializable {
+      val p: Long = 2147483587 // A large prime number
+      val a: Long = rand.nextLong() % p
+      val b: Long = rand.nextLong() % p
+
+      def hash(s: String): Int = {
+        val hashValue = (a * s.hashCode + b) % p
+        if (hashValue % 2 == 0) 1 else -1
+      }
+    }
 
 
   def exact_F0(x: RDD[String]) : Long = {
